@@ -1,11 +1,68 @@
-"""Knowledge importer — batch import with resume support."""
+"""Knowledge importer — batch import with resume support.
+Supports: .md .txt .jsonl .csv .pdf .png .jpg .jpeg"""
 
 import json
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 
-SUPPORTED_FORMATS = {".md", ".txt", ".jsonl", ".csv"}
+SUPPORTED_FORMATS = {".md", ".txt", ".jsonl", ".csv", ".pdf", ".png", ".jpg", ".jpeg"}
+
+
+def _extract_text(filepath):
+    """Extract text from any supported format. Returns (text, method)."""
+    fp = Path(filepath)
+    suffix = fp.suffix.lower()
+
+    if suffix in {".md", ".txt"}:
+        return fp.read_text(encoding="utf-8"), "raw"
+
+    if suffix == ".jsonl":
+        chunks = []
+        for line in fp.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+                chunks.append(obj.get("content", obj.get("text", json.dumps(obj))))
+            except json.JSONDecodeError:
+                chunks.append(line.strip())
+        return "\n".join(chunks), "jsonl"
+
+    if suffix == ".csv":
+        import csv
+        rows = []
+        with open(fp, newline="") as f:
+            for row in csv.DictReader(f):
+                rows.append(str(dict(row)))
+        return "\n".join(rows), "csv"
+
+    if suffix == ".pdf":
+        try:
+            import fitz  # pymupdf
+            doc = fitz.open(str(fp))
+            pages = [page.get_text() for page in doc]
+            doc.close()
+            return "\n".join(pages), "pymupdf"
+        except ImportError:
+            raise RuntimeError("pymupdf not installed: pip install pymupdf")
+
+    if suffix in {".png", ".jpg", ".jpeg"}:
+        # Try OCR first, fall back to description
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["tesseract", str(fp), "stdout"], capture_output=True, text=True, timeout=30
+            )
+            text = result.stdout.strip()
+            if text:
+                return text, "tesseract"
+        except Exception:
+            pass
+        # Fallback: store path as description for later llama-vision processing
+        return f"[图片: {fp.name}]", "path-only"
+
+    return "", "unknown"
 
 
 class KnowledgeImporter:
@@ -25,67 +82,52 @@ class KnowledgeImporter:
             CREATE TABLE IF NOT EXISTS import_log (
                 source TEXT PRIMARY KEY,
                 size_bytes INTEGER,
+                method TEXT,
                 imported_at TEXT
             )
         """)
         conn.commit()
         conn.close()
 
+    def import_file(self, filepath):
+        filepath = Path(filepath)
+        text, method = _extract_text(filepath)
+        if not text.strip():
+            return {"status": "skipped", "reason": "no text extracted"}
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute(
+            "INSERT INTO knowledge_fts (source, content) VALUES (?, ?)",
+            (str(filepath), text[:50_000]),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO import_log VALUES (?, ?, ?, ?)",
+            (str(filepath), len(text.encode()), method, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        return {"status": "ok", "method": method, "source": str(filepath)}
+
     def import_directory(self, dir_path, formats=None, progress=None):
-        """Import all supported files from directory with batch progress."""
         dir_path = Path(dir_path)
         formats = formats or SUPPORTED_FORMATS
         all_files = sorted(
             f for f in dir_path.rglob("*")
             if f.suffix.lower() in formats and f.is_file()
         )
-        results = {"files_done": 0, "total_chunks": 0, "errors": []}
+        results = {"files_done": 0, "errors": []}
 
         for i, fp in enumerate(all_files, 1):
             if progress:
                 progress(i, len(all_files))
             try:
-                self._import_file(fp)
+                self.import_file(fp)
                 results["files_done"] += 1
-                results["total_chunks"] += 1
             except Exception as e:
                 results["errors"].append({"file": str(fp), "error": str(e)})
         return results
 
-    def _import_file(self, filepath):
-        filepath = Path(filepath)
-        suffix = filepath.suffix.lower()
-        if suffix == ".md" or suffix == ".txt":
-            content = filepath.read_text(encoding="utf-8")
-        elif suffix == ".jsonl":
-            content = "\n".join(
-                json.loads(line).get("content", line)
-                for line in filepath.read_text().splitlines() if line.strip()
-            )
-        elif suffix == ".csv":
-            import csv
-            rows = []
-            with open(filepath) as f:
-                for row in csv.DictReader(f):
-                    rows.append(str(dict(row)))
-            content = "\n".join(rows)
-        else:
-            raise ValueError(f"Unsupported format: {suffix}")
-
-        conn = sqlite3.connect(str(self.db_path))
-        conn.execute(
-            "INSERT INTO knowledge_fts (source, content) VALUES (?, ?)",
-            (str(filepath), content[:50_000]),
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO import_log VALUES (?, ?, ?)",
-            (str(filepath), len(content.encode()), datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
-        conn.close()
-
     def search(self, query, top_k=10):
-        """Search imported knowledge."""
         conn = sqlite3.connect(str(self.db_path))
         rows = conn.execute(
             "SELECT source, snippet(knowledge_fts, 1, '<mark>', '</mark>', '...', 40) "

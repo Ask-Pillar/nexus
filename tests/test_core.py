@@ -30,7 +30,7 @@ class TestKnowledgeImporter:
         f = tmp_path / "test.md"
         f.write_text("# Hello\n\nThis is a test.")
         importer = KnowledgeImporter(tmp_path / "kb.db")
-        importer._import_file(f)
+        importer.import_file(f)
         results = importer.search("test")
         assert len(results) >= 1
 
