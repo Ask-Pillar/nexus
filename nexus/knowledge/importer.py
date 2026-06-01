@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 SUPPORTED_FORMATS = {".md", ".txt", ".jsonl", ".csv", ".pdf", ".png", ".jpg", ".jpeg"}
 
 
-def _extract_text(filepath):
-    """Extract text from any supported format. Returns (text, method)."""
+def _extract_text(filepath, llm_client=None):
+    """Extract text from any supported format. Returns (text, method).
+    llm_client: optional LLMClient for image/scan fallback.
+    """
     fp = Path(filepath)
     suffix = fp.suffix.lower()
 
@@ -38,31 +40,84 @@ def _extract_text(filepath):
         return "\n".join(rows), "csv"
 
     if suffix == ".pdf":
+        # 1. pymupdf text layer
         try:
-            import fitz  # pymupdf
+            import fitz
             doc = fitz.open(str(fp))
             pages = [page.get_text() for page in doc]
             doc.close()
-            return "\n".join(pages), "pymupdf"
-        except ImportError:
-            raise RuntimeError("pymupdf not installed: pip install pymupdf")
-
-    if suffix in {".png", ".jpg", ".jpeg"}:
-        # Try OCR first, fall back to description
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["tesseract", str(fp), "stdout"], capture_output=True, text=True, timeout=30
-            )
-            text = result.stdout.strip()
-            if text:
-                return text, "tesseract"
+            text = "\n".join(pages).strip()
+            if len(text) > 100:
+                return text, "pymupdf"
         except Exception:
             pass
-        # Fallback: store path as description for later llama-vision processing
+
+        # 2. tesseract OCR per page (scanned PDF)
+        try:
+            import subprocess, tempfile
+            doc = fitz.open(str(fp))
+            ocr_pages = []
+            for i, page in enumerate(doc):
+                pix = page.get_pixmap(dpi=200)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    pix.save(tmp.name)
+                    result = subprocess.run(
+                        ["tesseract", tmp.name, "stdout"], capture_output=True, text=True, timeout=30
+                    )
+                    if result.stdout.strip():
+                        ocr_pages.append(result.stdout.strip())
+            doc.close()
+            text = "\n".join(ocr_pages).strip()
+            if len(text) > 50:
+                return text, "pymupdf+ocr"
+        except Exception:
+            pass
+
+        # 3. LLM vision fallback
+        if llm_client:
+            return _llm_describe_file(fp, "PDF文档", llm_client), "llm-vision"
+        return f"[PDF: {fp.name}]", "path-only"
+
+    if suffix in {".png", ".jpg", ".jpeg"}:
+        text = _ocr_image(fp)
+        if len(text) > 20:
+            return text, "tesseract"
+        if llm_client:
+            return _llm_describe_file(fp, "图片", llm_client), "llm-vision"
         return f"[图片: {fp.name}]", "path-only"
 
     return "", "unknown"
+
+
+def _ocr_image(fp):
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["tesseract", str(fp), "stdout"], capture_output=True, text=True, timeout=30
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _llm_describe_file(fp, file_type, llm_client):
+    """Use LLM vision to describe a file's content."""
+    import base64
+    content = fp.read_bytes()
+    b64 = base64.b64encode(content).decode()
+
+    prompt = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": f"请详细描述这个{file_type}的内容，提取所有可见文字、表格数据、图表含义。如果是代码截图，请逐行转录代码。如果是流程图，请描述流程结构。"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        ],
+    }
+    try:
+        resp = llm_client.chat([prompt])
+        return resp
+    except Exception:
+        return f"[{file_type}: {fp.name}，LLM 不可用]"
 
 
 class KnowledgeImporter:
