@@ -1,0 +1,3 @@
+[submodule "sisyphus"]
+	path = sisyphus
+	url = https://github.com/Ask-Pillar/sisyphus.git

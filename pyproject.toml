@@ -1,0 +1,12 @@
+[project]
+name = "nexus"
+version = "0.1.0"
+description = "Agent 中枢记忆系统"
+dependencies = [
+    "sisyphus @ file://./sisyphus",
+    "pyyaml",
+]
+
+[project.scripts]
+nexus-serve = "server.mcp:main"
+nexus-ingest = "web.ingest:main"

@@ -1,0 +1,18 @@
+modules:
+  sisyphus:
+    enabled: true
+    weight: 1.0
+
+server:
+  ingest_port: 8765
+
+pools:
+  personal: {enabled: true, weight: 0.5}
+  project: {enabled: true, weight: 0.3}
+  knowledge: {enabled: false, weight: 0.2}
+  shared: {enabled: true, weight: 0.1}
+
+knowledge:
+  obsidian:
+    enabled: false
+    vault_path: ~/notes
