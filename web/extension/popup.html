@@ -1,10 +1,61 @@
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"><style>
-body{width:200px;padding:12px;font-family:-apple-system,sans-serif;font-size:12px;background:#1e1e1e;color:#d4d4d4}
-h3{color:#569cd6;font-size:13px}
-.status{color:#6a9955;font-size:11px}
+body{width:220px;padding:14px;font-family:-apple-system,sans-serif;font-size:12px;background:#1e1e1e;color:#d4d4d4;margin:0}
+h3{color:#569cd6;font-size:14px;margin:0 0 8px}
+.btn{display:block;width:100%;padding:8px;margin:6px 0;border:none;border-radius:4px;font-size:12px;cursor:pointer;text-align:center}
+.btn-capture{background:#569cd6;color:#fff}
+.btn-capture:hover{background:#4a9ac4}
+.status{color:#6a9955;font-size:11px;margin-top:8px;text-align:center}
+.site{color:var(--dim,#808080);font-size:10px;text-align:center;margin-top:4px}
 </style></head><body>
-<h3>Nexus Web Ingest</h3>
-<p class="status">已激活 — 正在监听</p>
-<p>自动采集 AI 对话内容<br>发送到 Nexus 记忆系统</p>
+<h3>Nexus Ingest</h3>
+<button class="btn btn-capture" id="captureBtn">采集当前页面</button>
+<div class="status" id="status">就绪</div>
+<div class="site" id="siteName"></div>
+<script>
+const btn = document.getElementById('captureBtn');
+const status = document.getElementById('status');
+const site = document.getElementById('siteName');
+
+chrome.tabs.query({active: true, currentWindow: true}, ([tab]) => {
+  const url = tab?.url || '';
+  if (url.includes('doubao')) site.textContent = '豆包';
+  else if (url.includes('tongyi')) site.textContent = '通义';
+  else if (url.includes('chatgpt') || url.includes('openai')) site.textContent = 'ChatGPT';
+  else if (url.includes('douyin')) site.textContent = '抖音';
+  else site.textContent = url.slice(0, 30);
+});
+
+btn.onclick = async () => {
+  btn.disabled = true;
+  btn.textContent = '采集中...';
+  const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+  
+  try {
+    const result = await chrome.scripting.executeScript({
+      target: {tabId: tab.id},
+      func: () => {
+        if (window.__nexus_capture) return window.__nexus_capture();
+        const text = document.body.innerText?.slice(0, 5000) || '';
+        return 'manual:' + text;
+      }
+    });
+    const text = result[0]?.result || '';
+    if (text.startsWith('manual:')) {
+      chrome.runtime.sendMessage({
+        action: 'ingest',
+        text: text.slice(7),
+        source: site.textContent || 'web'
+      });
+      status.textContent = '已采集 ' + (text.length - 7) + ' 字符';
+    }
+  } catch (e) {
+    status.textContent = '请在对话页面点击';
+  }
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = '采集当前页面';
+  }, 2000);
+};
+</script>
 </body></html>
