@@ -32,30 +32,12 @@ btn.onclick = async () => {
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
   
   try {
-    const result = await chrome.scripting.executeScript({
-      target: {tabId: tab.id},
-      func: () => {
-        if (window.__nexus_capture) return window.__nexus_capture();
-        const text = document.body.innerText?.slice(0, 5000) || '';
-        return 'manual:' + text;
-      }
-    });
-    const text = result[0]?.result || '';
-    if (text.startsWith('manual:')) {
-      chrome.runtime.sendMessage({
-        action: 'ingest',
-        text: text.slice(7),
-        source: site.textContent || 'web'
-      });
-      status.textContent = '已采集 ' + (text.length - 7) + ' 字符';
-    }
+    const resp = await chrome.tabs.sendMessage(tab.id, {action: 'capture'});
+    status.textContent = resp || '已采集';
   } catch (e) {
-    status.textContent = '请在对话页面点击';
+    status.textContent = '请在对话页面刷新后重试';
   }
-  setTimeout(() => {
-    btn.disabled = false;
-    btn.textContent = '采集当前页面';
-  }, 2000);
+  setTimeout(() => { btn.disabled = false; btn.textContent = '采集当前页面'; }, 2000);
 };
 </script>
 </body></html>

@@ -3,8 +3,9 @@
   "name": "Nexus Web Ingest",
   "version": "0.1",
   "description": "自动采集 AI 对话内容 → Nexus 记忆系统",
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting"],
   "host_permissions": [
+    "http://localhost:8765/*",
     "https://*.douyin.com/*",
     "https://*.doubao.com/*",
     "https://tongyi.aliyun.com/*",
