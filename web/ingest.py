@@ -1,6 +1,10 @@
 """Web Ingest — HTTP 端点，接收浏览器插件推送的文本"""
 
 import json
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sisyphus" / "src"))
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from nexus.core import NexusCore
 
